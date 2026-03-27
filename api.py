@@ -13,3 +13,13 @@ def chart():
 
     data = yf.Ticker(symbol).history(period="7d")
     return data.to_json()
+
+@app.route("/chart_full")
+def chart_full():
+    symbol = request.args.get("symbol")
+    if not symbol:
+        return jsonify({"error": "symbol required"}), 400
+
+    # 1ヶ月分の日足データ
+    data = yf.Ticker(symbol).history(period="1mo", interval="1d")
+    return data.to_json()
