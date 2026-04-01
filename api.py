@@ -24,7 +24,7 @@ def chart_full():
     data = yf.Ticker(symbol).history(
         period="200d",
         interval="1d",
-        auto_adjust=False  # ← これが重要
+        auto_adjust=False  # ← 楽天証券と一致させるために必須
     )
 
     return data.to_json()
