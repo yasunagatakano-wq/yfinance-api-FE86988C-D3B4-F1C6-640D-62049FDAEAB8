@@ -3,7 +3,7 @@ from flask_cors import CORS
 import yfinance as yf
 
 app = Flask(__name__)
-CORS(app)  # ← これが重要！
+CORS(app)  # ← CORS 有効化
 
 @app.route("/chart")
 def chart():
@@ -20,6 +20,6 @@ def chart_full():
     if not symbol:
         return jsonify({"error": "symbol required"}), 400
 
-    # 1ヶ月分の日足データ
-    data = yf.Ticker(symbol).history(period="1mo", interval="1d")
+    # ★ 200日分の日足データ（MA 計算用）
+    data = yf.Ticker(symbol).history(period="200d", interval="1d")
     return data.to_json()
