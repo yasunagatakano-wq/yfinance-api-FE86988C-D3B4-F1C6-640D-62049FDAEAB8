@@ -22,7 +22,7 @@ CODE_TO_NAME = {}
 @app.on_event("startup")
 def load_ticker_list():
     global TICKERS, CODE_TO_NAME
-    df = pd.read_excel("data/jpx_list.xlsx")
+    df = pd.read_excel("data/data_j.xlsx")
     # 列名は実際の Excel に合わせて調整
     code_col = "コード"
     name_col = "銘柄名"
