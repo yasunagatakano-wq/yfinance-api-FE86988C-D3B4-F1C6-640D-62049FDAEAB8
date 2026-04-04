@@ -2,11 +2,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import yfinance as yf
+import math
 
 app = FastAPI()
 
 # ============================
-# CORS 設定（GitHub Pages からのアクセスを許可）
+# CORS 設定
 # ============================
 app.add_middleware(
     CORSMiddleware,
@@ -23,7 +24,6 @@ ticker_list = []
 
 def load_ticker_list():
     global ticker_list
-    # Render の構成に合わせたパス
     df = pd.read_excel("app/data/data_j.xlsx")
     ticker_list = df.to_dict(orient="records")
 
@@ -31,83 +31,91 @@ load_ticker_list()
 
 
 # ============================
-# 高速版スクリーニング API（全銘柄一括取得）
+# 分割ダウンロード版スクリーニング API
 # ============================
 @app.api_route("/screening", methods=["GET", "HEAD"])
 def screening(volume_ratio: float = 5, shadow_ratio: float = 5):
-    # 1. 銘柄コードをまとめて ".T" を付ける
-    symbols = [f"{str(row['コード'])}.T" for row in ticker_list]
-
-    # 2. 全銘柄を一括ダウンロード（2日分）
-    df = yf.download(
-        symbols,
-        period="2d",
-        interval="1d",
-        group_by="ticker",
-        progress=False,
-        threads=True
-    )
-
     results = []
 
-    # 3. 各銘柄をループして条件判定
-    for row in ticker_list:
-        code = str(row["コード"])
-        name = row["銘柄名"]
-        symbol = f"{code}.T"
+    # 4000銘柄を 200 銘柄ずつに分割
+    chunk_size = 200
+    symbols_all = [f"{str(row['コード'])}.T" for row in ticker_list]
+    chunks = math.ceil(len(symbols_all) / chunk_size)
 
-        try:
-            data = df[symbol]
+    for i in range(chunks):
+        # 200銘柄ずつ取り出す
+        symbols = symbols_all[i * chunk_size : (i + 1) * chunk_size]
 
-            if len(data) < 2:
+        # 分割ダウンロード
+        df = yf.download(
+            symbols,
+            period="2d",
+            interval="1d",
+            group_by="ticker",
+            progress=False,
+            threads=True
+        )
+
+        # 各銘柄を判定
+        for row in ticker_list:
+            code = str(row["コード"])
+            name = row["銘柄名"]
+            symbol = f"{code}.T"
+
+            # 今のチャンクに含まれていない銘柄はスキップ
+            if symbol not in symbols:
                 continue
 
-            today = data.iloc[-1]
-            yesterday = data.iloc[-2]
+            try:
+                data = df[symbol]
+                if len(data) < 2:
+                    continue
 
-            # 出来高倍率
-            vol_ratio = today["Volume"] / yesterday["Volume"] if yesterday["Volume"] > 0 else 0
+                today = data.iloc[-1]
+                yesterday = data.iloc[-2]
 
-            # 上髭実体比
-            high = today["High"]
-            open_ = today["Open"]
-            close = today["Close"]
+                # 出来高倍率
+                vol_ratio = today["Volume"] / yesterday["Volume"] if yesterday["Volume"] > 0 else 0
 
-            upper_shadow = high - max(open_, close)
-            real_body = abs(close - open_)
-            shadow_ratio_value = upper_shadow / real_body if real_body > 0 else 0
+                # 上髭実体比
+                high = today["High"]
+                open_ = today["Open"]
+                close = today["Close"]
 
-            # 条件判定
-            if vol_ratio >= volume_ratio and shadow_ratio_value >= shadow_ratio:
-                results.append({
-                    "コード": code,
-                    "銘柄名": name,
-                    "出来高倍率": round(vol_ratio, 2),
-                    "上髭実体比": round(shadow_ratio_value, 2),
-                    "出来高": int(today["Volume"]),
-                    "上髭": round(upper_shadow, 2),
-                    "実体": round(real_body, 2),
-                })
+                upper_shadow = high - max(open_, close)
+                real_body = abs(close - open_)
+                shadow_ratio_value = upper_shadow / real_body if real_body > 0 else 0
 
-        except Exception:
-            continue
+                # 条件判定
+                if vol_ratio >= volume_ratio and shadow_ratio_value >= shadow_ratio:
+                    results.append({
+                        "コード": code,
+                        "銘柄名": name,
+                        "出来高倍率": round(vol_ratio, 2),
+                        "上髭実体比": round(shadow_ratio_value, 2),
+                        "出来高": int(today["Volume"]),
+                        "上髭": round(upper_shadow, 2),
+                        "実体": round(real_body, 2),
+                    })
+
+            except Exception:
+                continue
 
     return results
 
 
 # ============================
-# チャート API（個別銘柄）
+# チャート API（単銘柄モード強制）
 # ============================
 @app.get("/chart")
 def chart(ticker: str):
     symbol = f"{ticker}.T"
 
     df = yf.download(symbol, period="200d", interval="1d", progress=False)
-
     if df.empty:
         return {"error": "no data"}
 
-    # ★ 単銘柄モードを強制的にフラット化
+    # ★ 複数銘柄モードの DataFrame を単銘柄に強制変換
     if isinstance(df.columns, pd.MultiIndex):
         df = df.xs(symbol, level=1, axis=1)
 
