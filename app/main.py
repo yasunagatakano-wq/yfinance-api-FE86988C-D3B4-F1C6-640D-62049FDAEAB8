@@ -103,8 +103,13 @@ def chart(ticker: str):
     symbol = f"{ticker}.T"
 
     df = yf.download(symbol, period="200d", interval="1d", progress=False)
+
     if df.empty:
         return {"error": "no data"}
+
+    # ★ 単銘柄モードを強制的にフラット化
+    if isinstance(df.columns, pd.MultiIndex):
+        df = df.xs(symbol, level=1, axis=1)
 
     df.index = df.index.strftime("%Y-%m-%d")
 
