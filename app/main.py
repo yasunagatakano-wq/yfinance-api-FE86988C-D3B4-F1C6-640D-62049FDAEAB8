@@ -1,135 +1,102 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import yfinance as yf
 
 app = FastAPI()
 
-# 必要ならフロントのオリジンを指定
+# ★ CORS 設定（GitHub Pages からのアクセスを許可）
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 必要に応じて絞る
+    allow_origins=["*"],  # 必要なら ["https://yasunagatakano-wq.github.io"] に変更可
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 起動時に Excel を読み込んでキャッシュ
-TICKERS = []
-CODE_TO_NAME = {}
+# ★ 銘柄リストを起動時に読み込む
+ticker_list = []
 
-
-@app.on_event("startup")
 def load_ticker_list():
-    global TICKERS, CODE_TO_NAME
+    global ticker_list
+    # ★ Render の構成に合わせてパスを修正
     df = pd.read_excel("app/data/data_j.xlsx")
-    # 列名は実際の Excel に合わせて調整
-    code_col = "コード"
-    name_col = "銘柄名"
 
-    df[code_col] = df[code_col].astype(str).str.strip()
-    df[name_col] = df[name_col].astype(str).str.strip()
+    # 列名は「コード」「銘柄名」である前提
+    ticker_list = df.to_dict(orient="records")
 
-    TICKERS = df[code_col].tolist()
-    CODE_TO_NAME = dict(zip(df[code_col], df[name_col]))
-    print(f"Loaded {len(TICKERS)} tickers")
+load_ticker_list()
 
 
+# ============================
+#  スクリーニング API
+# ============================
 @app.get("/screening")
-def screening(
-    volume_ratio: float = Query(5.0, alias="volume_ratio"),
-    shadow_ratio: float = Query(5.0, alias="shadow_ratio"),
-):
-    """
-    全銘柄を対象にサーバー側でスクリーニングして、
-    条件に合った銘柄だけを返す。
-    """
-    if not TICKERS:
-        return []
-
-    # yfinance で全銘柄 200 日分をまとめて取得
-    symbols = [f"{code}.T" for code in TICKERS]
-    data = yf.download(
-        symbols,
-        period="200d",
-        interval="1d",
-        group_by="ticker",
-        threads=True,
-    )
-
+def screening(volume_ratio: float = 5, shadow_ratio: float = 5):
     results = []
 
-    for code in TICKERS:
+    for row in ticker_list:
+        code = str(row["コード"])
+        name = row["銘柄名"]
+
         symbol = f"{code}.T"
-        if symbol not in data:
-            continue
 
-        df = data[symbol].dropna()
-        if len(df) < 2:
-            continue
+        try:
+            df = yf.download(symbol, period="2d", interval="1d", progress=False)
+            if len(df) < 2:
+                continue
 
-        latest = df.iloc[-1]
-        prev = df.iloc[-2]
+            today = df.iloc[-1]
+            yesterday = df.iloc[-2]
 
-        open_ = latest["Open"]
-        close_ = latest["Close"]
-        high_ = latest["High"]
-        vol_today = latest["Volume"]
-        vol_yest = prev["Volume"]
+            # 出来高倍率
+            vol_ratio = today["Volume"] / yesterday["Volume"] if yesterday["Volume"] > 0 else 0
 
-        if any(pd.isna(v) for v in [open_, close_, high_, vol_today, vol_yest]):
-            continue
+            # 上髭実体比
+            high = today["High"]
+            low = today["Low"]
+            open_ = today["Open"]
+            close = today["Close"]
 
-        real_body = abs(close_ - open_)
-        upper_shadow = high_ - max(open_, close_)
-        actual_volume_ratio = vol_today / vol_yest if vol_yest > 0 else 0
-        actual_shadow_ratio = upper_shadow / real_body if real_body > 0 else 0
+            upper_shadow = high - max(open_, close)
+            real_body = abs(close - open_)
+            shadow_ratio_value = upper_shadow / real_body if real_body > 0 else 0
 
-        if actual_volume_ratio >= volume_ratio and actual_shadow_ratio >= shadow_ratio:
-            name = CODE_TO_NAME.get(code, "N/A")
-            results.append(
-                {
+            # 条件判定
+            if vol_ratio >= volume_ratio and shadow_ratio_value >= shadow_ratio:
+                results.append({
                     "コード": code,
                     "銘柄名": name,
-                    "出来高倍率": round(actual_volume_ratio, 2),
-                    "上髭実体比": round(actual_shadow_ratio, 2),
-                    "出来高": int(vol_today),
+                    "出来高倍率": round(vol_ratio, 2),
+                    "上髭実体比": round(shadow_ratio_value, 2),
+                    "出来高": int(today["Volume"]),
                     "上髭": round(upper_shadow, 2),
                     "実体": round(real_body, 2),
-                }
-            )
+                })
 
-    # 出来高倍率で降順ソートして返す
-    results.sort(key=lambda x: x["出来高倍率"], reverse=True)
+        except Exception:
+            continue
+
     return results
 
 
+# ============================
+#  チャート API
+# ============================
 @app.get("/chart")
-def chart(ticker: str = Query(..., alias="ticker")):
-    """
-    個別銘柄の 200 日分データを返す。
-    chart.js / 旧 screening.js が期待していた形式に近づける。
-    """
+def chart(ticker: str):
     symbol = f"{ticker}.T"
-    df = yf.download(symbol, period="200d", interval="1d")
+
+    df = yf.download(symbol, period="200d", interval="1d", progress=False)
     if df.empty:
-        return {}
+        return {"error": "no data"}
 
-    df = df.dropna()
-    result = {
-        "Open": {},
-        "High": {},
-        "Low": {},
-        "Close": {},
-        "Volume": {},
+    df.index = df.index.strftime("%Y-%m-%d")
+
+    return {
+        "Open": df["Open"].to_dict(),
+        "High": df["High"].to_dict(),
+        "Low": df["Low"].to_dict(),
+        "Close": df["Close"].to_dict(),
+        "Volume": df["Volume"].to_dict(),
     }
-
-    for idx, row in df.iterrows():
-        date_str = idx.strftime("%Y-%m-%d")
-        result["Open"][date_str] = float(row["Open"])
-        result["High"][date_str] = float(row["High"])
-        result["Low"][date_str] = float(row["Low"])
-        result["Close"][date_str] = float(row["Close"])
-        result["Volume"][date_str] = float(row["Volume"])
-
-    return result
