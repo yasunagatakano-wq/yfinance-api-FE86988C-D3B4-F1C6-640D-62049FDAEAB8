@@ -5,7 +5,9 @@ import yfinance as yf
 
 app = FastAPI()
 
-# ★ CORS 設定（GitHub Pages からのアクセスを許可）
+# ============================
+# CORS 設定（GitHub Pages からのアクセスを許可）
+# ============================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # 必要なら ["https://yasunagatakano-wq.github.io"] に変更可
@@ -14,47 +16,60 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ★ 銘柄リストを起動時に読み込む
+# ============================
+# 銘柄リスト読み込み
+# ============================
 ticker_list = []
 
 def load_ticker_list():
     global ticker_list
-    # ★ Render の構成に合わせてパスを修正
+    # Render の構成に合わせたパス
     df = pd.read_excel("app/data/data_j.xlsx")
-
-    # 列名は「コード」「銘柄名」である前提
     ticker_list = df.to_dict(orient="records")
 
 load_ticker_list()
 
 
 # ============================
-#  スクリーニング API
+# 高速版スクリーニング API（全銘柄一括取得）
 # ============================
-@app.get("/screening")
+@app.api_route("/screening", methods=["GET", "HEAD"])
 def screening(volume_ratio: float = 5, shadow_ratio: float = 5):
+    # 1. 銘柄コードをまとめて ".T" を付ける
+    symbols = [f"{str(row['コード'])}.T" for row in ticker_list]
+
+    # 2. 全銘柄を一括ダウンロード（2日分）
+    df = yf.download(
+        symbols,
+        period="2d",
+        interval="1d",
+        group_by="ticker",
+        progress=False,
+        threads=True
+    )
+
     results = []
 
+    # 3. 各銘柄をループして条件判定
     for row in ticker_list:
         code = str(row["コード"])
         name = row["銘柄名"]
-
         symbol = f"{code}.T"
 
         try:
-            df = yf.download(symbol, period="2d", interval="1d", progress=False)
-            if len(df) < 2:
+            data = df[symbol]
+
+            if len(data) < 2:
                 continue
 
-            today = df.iloc[-1]
-            yesterday = df.iloc[-2]
+            today = data.iloc[-1]
+            yesterday = data.iloc[-2]
 
             # 出来高倍率
             vol_ratio = today["Volume"] / yesterday["Volume"] if yesterday["Volume"] > 0 else 0
 
             # 上髭実体比
             high = today["High"]
-            low = today["Low"]
             open_ = today["Open"]
             close = today["Close"]
 
@@ -81,7 +96,7 @@ def screening(volume_ratio: float = 5, shadow_ratio: float = 5):
 
 
 # ============================
-#  チャート API
+# チャート API（個別銘柄）
 # ============================
 @app.get("/chart")
 def chart(ticker: str):
