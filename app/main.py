@@ -37,35 +37,40 @@ load_ticker_list()
 # ============================
 YF_URL = "https://query1.finance.yahoo.com/v7/finance/quote?symbols={}"
 
-async def fetch_quote(session, symbol):
+async def fetch_quote(session, symbol, retries=3):
     url = YF_URL.format(symbol)
-    async with session.get(url) as resp:
-        data = await resp.json()
-        return data["quoteResponse"]["result"][0] if data["quoteResponse"]["result"] else None
+
+    for attempt in range(retries):
+        async with session.get(url) as resp:
+            # 成功
+            if resp.status == 200:
+                data = await resp.json()
+                result_list = data.get("quoteResponse", {}).get("result", [])
+                return result_list[0] if result_list else {"error": "no result"}
+
+            # レート制限 → 少し待ってリトライ
+            if resp.status == 429:
+                await asyncio.sleep(0.5 * (attempt + 1))
+                continue
+
+            # その他の HTTP エラー
+            return {"error": f"HTTP {resp.status}"}
+
+    return {"error": "too many retries"}
 
 
 @app.get("/quote")
 async def quote(ticker: str):
     symbol = f"{ticker}.T"
 
-    async with aiohttp.ClientSession() as session:
-        url = YF_URL.format(symbol)
-        async with session.get(url) as resp:
-            if resp.status != 200:
-                return {"error": f"HTTP {resp.status}"}
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
 
-            data = await resp.json()
+    async with aiohttp.ClientSession(headers=headers) as session:
+        result = await fetch_quote(session, symbol)
 
-    # 安全に result を取り出す
-    try:
-        result_list = data.get("quoteResponse", {}).get("result", [])
-        if not result_list:
-            return {"error": "no result from Yahoo Finance"}
-
-        return result_list[0]
-
-    except Exception as e:
-        return {"error": f"parse error: {str(e)}"}
+    return result
 
 
 # ============================
