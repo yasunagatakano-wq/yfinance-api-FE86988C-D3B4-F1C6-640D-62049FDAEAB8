@@ -3,6 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import yfinance as yf
 
+# yfinance の警告ログを無効化
+yf.utils.disable_warnings()
+
 app = FastAPI()
 
 # ============================
@@ -29,12 +32,12 @@ def load_ticker_list():
 load_ticker_list()
 
 # ============================
-# /screening（最適化版）
+# /screening（完全安定版）
 # ============================
 @app.get("/screening")
 def screening(volume_ratio: float = 5, shadow_ratio: float = 5):
 
-    batch_size = 30  # Render 無料枠の最適値
+    batch_size = 20  # Render 無料枠の最適値
     results = []
 
     for i in range(0, len(ticker_list), batch_size):
