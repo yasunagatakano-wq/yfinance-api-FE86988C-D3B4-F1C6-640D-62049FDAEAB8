@@ -2,9 +2,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import yfinance as yf
+import warnings
 
 # yfinance の警告ログを無効化
-yf.utils.disable_warnings()
+warnings.filterwarnings("ignore")
 
 app = FastAPI()
 
