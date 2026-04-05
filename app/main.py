@@ -49,9 +49,23 @@ async def quote(ticker: str):
     symbol = f"{ticker}.T"
 
     async with aiohttp.ClientSession() as session:
-        result = await fetch_quote(session, symbol)
+        url = YF_URL.format(symbol)
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                return {"error": f"HTTP {resp.status}"}
 
-    return result
+            data = await resp.json()
+
+    # 安全に result を取り出す
+    try:
+        result_list = data.get("quoteResponse", {}).get("result", [])
+        if not result_list:
+            return {"error": "no result from Yahoo Finance"}
+
+        return result_list[0]
+
+    except Exception as e:
+        return {"error": f"parse error: {str(e)}"}
 
 
 # ============================
