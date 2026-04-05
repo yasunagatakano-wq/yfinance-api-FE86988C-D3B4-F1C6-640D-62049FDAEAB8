@@ -64,7 +64,12 @@ async def quote(ticker: str):
     symbol = f"{ticker}.T"
 
     headers = {
-        "User-Agent": "Mozilla/5.0"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+        "Connection": "keep-alive",
+        "Referer": "https://finance.yahoo.com/",
+        "Cookie": "B=dummy; yfin-usr=1"
     }
 
     async with aiohttp.ClientSession(headers=headers) as session:
