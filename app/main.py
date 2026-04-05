@@ -2,7 +2,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import yfinance as yf
-import aiohttp
 import asyncio
 
 app = FastAPI()
@@ -23,113 +22,98 @@ app.add_middleware(
 # ============================
 ticker_list = []
 
+
 def load_ticker_list():
     global ticker_list
     df = pd.read_excel("app/data/data_j.xlsx")
     ticker_list = df.to_dict(orient="records")
 
+
 load_ticker_list()
 
-
 # ============================
-# Yahoo Finance JSON API（async）
+# バッチサイズ自動調整ロジック
 # ============================
-YF_URL = "https://query1.finance.yahoo.com/v7/finance/quote?symbols={}"
-
-async def fetch_quote(session, symbol, retries=3):
-    url = YF_URL.format(symbol)
-
-    for attempt in range(retries):
-        async with session.get(url) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                result_list = data.get("quoteResponse", {}).get("result", [])
-                return result_list[0] if result_list else {"error": "no result"}
-
-            if resp.status == 429:
-                await asyncio.sleep(0.5 * (attempt + 1))
-                continue
-
-            return {"error": f"HTTP {resp.status}"}
-
-    return {"error": "too many retries"}
 
 
-@app.get("/quote")
-async def quote(ticker: str):
-    symbol = f"{ticker}.T"
+def get_batch_size(n: int) -> int:
+    """
+    Render 無償プラン（512MB / 1 shared core）を前提とした経験則ベースの自動調整。
+    - 小規模なら大きめバッチ
+    - 大規模（4000銘柄など）は 30 前後に抑える
+    """
+    if n <= 500:
+        return 60
+    if n <= 2000:
+        return 40
+    return 30  # 4000銘柄クラスは 30 が最適帯
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
-        "Connection": "keep-alive",
-        "Referer": "https://finance.yahoo.com/",
-        "Cookie": "B=dummy; yfin-usr=1"
-    }
 
-    async with aiohttp.ClientSession(headers=headers) as session:
-        result = await fetch_quote(session, symbol)
-
-    return result
+MAX_CONCURRENCY = 3  # 並列バッチ数（CPU とレート制限のバランス）
 
 
 # ============================
-# 分割バッチ方式スクリーニング（メモリ対策 + レート制限対策）
+# 分割バッチ + 並列化（async）スクリーニング
 # ============================
-@app.get("/screening")
-def screening(volume_ratio: float = 5, shadow_ratio: float = 5):
 
-    batch_size = 100  # ← メモリとレート制限の最適バランス
+
+async def fetch_batch(batch, volume_ratio: float, shadow_ratio: float):
+    """
+    1バッチ分（例：30銘柄）の yfinance.download を実行し、
+    条件に合う銘柄だけを返す。
+    """
+    symbols = [f"{row['コード']}.T" for row in batch]
+
+    # yfinance は同期関数なので、スレッドプールで実行して async 化する
+    df = await asyncio.to_thread(
+        yf.download,
+        symbols,
+        None,
+        None,
+        period="2d",
+        interval="1d",
+        group_by="ticker",
+        threads=True,
+        progress=False,
+    )
+
     results = []
 
-    for i in range(0, len(ticker_list), batch_size):
-        batch = ticker_list[i:i + batch_size]
-        symbols = [f"{row['コード']}.T" for row in batch]
+    for row in batch:
+        code = str(row["コード"])
+        name = row["銘柄名"]
+        symbol = f"{code}.T"
 
-        # 100銘柄まとめて取得（レート制限回避）
-        df = yf.download(
-            symbols,
-            period="2d",
-            interval="1d",
-            group_by="ticker",
-            threads=True
-        )
+        try:
+            data = df[symbol]
 
-        # 各銘柄を処理
-        for row in batch:
-            code = str(row["コード"])
-            name = row["銘柄名"]
-            symbol = f"{code}.T"
+            if len(data) < 2:
+                continue
 
-            try:
-                data = df[symbol]
+            today = data.iloc[-1]
+            yesterday = data.iloc[-2]
 
-                if len(data) < 2:
-                    continue
+            # 出来高倍率
+            vol_ratio = (
+                today["Volume"] / yesterday["Volume"]
+                if yesterday["Volume"] > 0
+                else 0
+            )
 
-                today = data.iloc[-1]
-                yesterday = data.iloc[-2]
+            # 上髭実体比
+            high = today["High"]
+            open_ = today["Open"]
+            close = today["Close"]
 
-                # 出来高倍率
-                vol_ratio = (
-                    today["Volume"] / yesterday["Volume"]
-                    if yesterday["Volume"] > 0 else 0
-                )
+            upper_shadow = high - max(open_, close)
+            real_body = abs(close - open_)
+            shadow_ratio_value = (
+                upper_shadow / real_body if real_body > 0 else 0
+            )
 
-                # 上髭実体比
-                high = today["High"]
-                open_ = today["Open"]
-                close = today["Close"]
-
-                upper_shadow = high - max(open_, close)
-                real_body = abs(close - open_)
-                shadow_ratio_value = (
-                    upper_shadow / real_body if real_body > 0 else 0
-                )
-
-                if vol_ratio >= volume_ratio and shadow_ratio_value >= shadow_ratio:
-                    results.append({
+            if vol_ratio >= volume_ratio and shadow_ratio_value >= shadow_ratio:
+                results.append(
+                    {
                         "コード": code,
                         "銘柄名": name,
                         "出来高倍率": round(vol_ratio, 2),
@@ -137,19 +121,46 @@ def screening(volume_ratio: float = 5, shadow_ratio: float = 5):
                         "出来高": int(today["Volume"]),
                         "上髭": round(upper_shadow, 2),
                         "実体": round(real_body, 2),
-                    })
+                    }
+                )
 
-            except Exception:
-                continue
+        except Exception:
+            continue
 
-        # メモリ解放（超重要）
-        del df
+    # df はスコープを抜ければ GC 対象になる
+    return results
 
+
+@app.get("/screening")
+async def screening(volume_ratio: float = 5, shadow_ratio: float = 5):
+    """
+    - 銘柄数に応じてバッチサイズを自動調整
+    - 各バッチを async + スレッドプールで並列実行
+    - Render 無償プランでも 4000 銘柄を現実的な時間で処理
+    """
+    n = len(ticker_list)
+    batch_size = get_batch_size(n)
+
+    batches = [
+        ticker_list[i : i + batch_size] for i in range(0, n, batch_size)
+    ]
+
+    sem = asyncio.Semaphore(MAX_CONCURRENCY)
+
+    async def sem_fetch(batch):
+        async with sem:
+            return await fetch_batch(batch, volume_ratio, shadow_ratio)
+
+    tasks = [sem_fetch(batch) for batch in batches]
+    all_results = await asyncio.gather(*tasks)
+
+    # フラットにする
+    results = [item for sub in all_results for item in sub]
     return results
 
 
 # ============================
-# チャート API（単銘柄モード強制）
+# チャート API（単銘柄）
 # ============================
 @app.get("/chart")
 def chart(ticker: str):
