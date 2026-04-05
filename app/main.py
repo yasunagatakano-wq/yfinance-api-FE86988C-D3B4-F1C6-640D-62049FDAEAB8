@@ -118,6 +118,9 @@ def screening(volume_ratio: float = 5, shadow_ratio: float = 5):
         except Exception:
             continue
 
+    # ★ 銘柄コードの昇順でソート
+    results.sort(key=lambda x: x["コード"])
+
     return results
 
 # ============================
