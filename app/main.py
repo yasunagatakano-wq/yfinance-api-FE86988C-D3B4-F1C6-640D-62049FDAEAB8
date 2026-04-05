@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import yfinance as yf
 import math
+import aiohttp
+import asyncio
 
 app = FastAPI()
 
@@ -31,7 +33,29 @@ load_ticker_list()
 
 
 # ============================
-# 分割ダウンロード版スクリーニング API
+# Yahoo Finance JSON API（async）
+# ============================
+YF_URL = "https://query1.finance.yahoo.com/v7/finance/quote?symbols={}"
+
+async def fetch_quote(session, symbol):
+    url = YF_URL.format(symbol)
+    async with session.get(url) as resp:
+        data = await resp.json()
+        return data["quoteResponse"]["result"][0] if data["quoteResponse"]["result"] else None
+
+
+@app.get("/quote")
+async def quote(ticker: str):
+    symbol = f"{ticker}.T"
+
+    async with aiohttp.ClientSession() as session:
+        result = await fetch_quote(session, symbol)
+
+    return result
+
+
+# ============================
+# 分割ダウンロード版スクリーニング API（検証用）
 # ============================
 @app.api_route("/screening", methods=["GET", "HEAD"])
 def screening(volume_ratio: float = 5, shadow_ratio: float = 5):
