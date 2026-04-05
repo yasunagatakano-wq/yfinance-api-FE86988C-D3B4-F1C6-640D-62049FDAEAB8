@@ -2,7 +2,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import yfinance as yf
-import math
 import aiohttp
 import asyncio
 
@@ -42,18 +41,15 @@ async def fetch_quote(session, symbol, retries=3):
 
     for attempt in range(retries):
         async with session.get(url) as resp:
-            # 成功
             if resp.status == 200:
                 data = await resp.json()
                 result_list = data.get("quoteResponse", {}).get("result", [])
                 return result_list[0] if result_list else {"error": "no result"}
 
-            # レート制限 → 少し待ってリトライ
             if resp.status == 429:
                 await asyncio.sleep(0.5 * (attempt + 1))
                 continue
 
-            # その他の HTTP エラー
             return {"error": f"HTTP {resp.status}"}
 
     return {"error": "too many retries"}
@@ -79,51 +75,75 @@ async def quote(ticker: str):
 
 
 # ============================
-# 分割ダウンロード版スクリーニング API（検証用）
+# 分割バッチ方式スクリーニング（メモリ対策 + レート制限対策）
 # ============================
-@app.api_route("/screening", methods=["GET", "HEAD"])
+@app.get("/screening")
 def screening(volume_ratio: float = 5, shadow_ratio: float = 5):
-    # 検証用：先頭 50 銘柄だけに限定
-    subset = ticker_list[:50]
 
+    batch_size = 100  # ← メモリとレート制限の最適バランス
     results = []
 
-    for row in subset:
-        code = str(row["コード"])
-        name = row["銘柄名"]
-        symbol = f"{code}.T"
+    for i in range(0, len(ticker_list), batch_size):
+        batch = ticker_list[i:i + batch_size]
+        symbols = [f"{row['コード']}.T" for row in batch]
 
-        try:
-            df = yf.download(symbol, period="2d", interval="1d", progress=False)
-            if len(df) < 2:
+        # 100銘柄まとめて取得（レート制限回避）
+        df = yf.download(
+            symbols,
+            period="2d",
+            interval="1d",
+            group_by="ticker",
+            threads=True
+        )
+
+        # 各銘柄を処理
+        for row in batch:
+            code = str(row["コード"])
+            name = row["銘柄名"]
+            symbol = f"{code}.T"
+
+            try:
+                data = df[symbol]
+
+                if len(data) < 2:
+                    continue
+
+                today = data.iloc[-1]
+                yesterday = data.iloc[-2]
+
+                # 出来高倍率
+                vol_ratio = (
+                    today["Volume"] / yesterday["Volume"]
+                    if yesterday["Volume"] > 0 else 0
+                )
+
+                # 上髭実体比
+                high = today["High"]
+                open_ = today["Open"]
+                close = today["Close"]
+
+                upper_shadow = high - max(open_, close)
+                real_body = abs(close - open_)
+                shadow_ratio_value = (
+                    upper_shadow / real_body if real_body > 0 else 0
+                )
+
+                if vol_ratio >= volume_ratio and shadow_ratio_value >= shadow_ratio:
+                    results.append({
+                        "コード": code,
+                        "銘柄名": name,
+                        "出来高倍率": round(vol_ratio, 2),
+                        "上髭実体比": round(shadow_ratio_value, 2),
+                        "出来高": int(today["Volume"]),
+                        "上髭": round(upper_shadow, 2),
+                        "実体": round(real_body, 2),
+                    })
+
+            except Exception:
                 continue
 
-            today = df.iloc[-1]
-            yesterday = df.iloc[-2]
-
-            vol_ratio = today["Volume"] / yesterday["Volume"] if yesterday["Volume"] > 0 else 0
-
-            high = today["High"]
-            open_ = today["Open"]
-            close = today["Close"]
-
-            upper_shadow = high - max(open_, close)
-            real_body = abs(close - open_)
-            shadow_ratio_value = upper_shadow / real_body if real_body > 0 else 0
-
-            if vol_ratio >= volume_ratio and shadow_ratio_value >= shadow_ratio:
-                results.append({
-                    "コード": code,
-                    "銘柄名": name,
-                    "出来高倍率": round(vol_ratio, 2),
-                    "上髭実体比": round(shadow_ratio_value, 2),
-                    "出来高": int(today["Volume"]),
-                    "上髭": round(upper_shadow, 2),
-                    "実体": round(real_body, 2),
-                })
-
-        except Exception:
-            continue
+        # メモリ解放（超重要）
+        del df
 
     return results
 
@@ -139,7 +159,6 @@ def chart(ticker: str):
     if df.empty:
         return {"error": "no data"}
 
-    # ★ 複数銘柄モードの DataFrame を単銘柄に強制変換
     if isinstance(df.columns, pd.MultiIndex):
         df = df.xs(symbol, level=1, axis=1)
 
