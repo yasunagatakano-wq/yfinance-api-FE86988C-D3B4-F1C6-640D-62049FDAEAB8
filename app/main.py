@@ -35,71 +35,47 @@ load_ticker_list()
 # ============================
 @app.api_route("/screening", methods=["GET", "HEAD"])
 def screening(volume_ratio: float = 5, shadow_ratio: float = 5):
+    # 検証用：先頭 50 銘柄だけに限定
+    subset = ticker_list[:50]
+
     results = []
 
-    # 4000銘柄を 200 銘柄ずつに分割
-    chunk_size = 200
-    symbols_all = [f"{str(row['コード'])}.T" for row in ticker_list]
-    chunks = math.ceil(len(symbols_all) / chunk_size)
+    for row in subset:
+        code = str(row["コード"])
+        name = row["銘柄名"]
+        symbol = f"{code}.T"
 
-    for i in range(chunks):
-        # 200銘柄ずつ取り出す
-        symbols = symbols_all[i * chunk_size : (i + 1) * chunk_size]
-
-        # 分割ダウンロード
-        df = yf.download(
-            symbols,
-            period="2d",
-            interval="1d",
-            group_by="ticker",
-            progress=False,
-            threads=True
-        )
-
-        # 各銘柄を判定
-        for row in ticker_list:
-            code = str(row["コード"])
-            name = row["銘柄名"]
-            symbol = f"{code}.T"
-
-            # 今のチャンクに含まれていない銘柄はスキップ
-            if symbol not in symbols:
+        try:
+            df = yf.download(symbol, period="2d", interval="1d", progress=False)
+            if len(df) < 2:
                 continue
 
-            try:
-                data = df[symbol]
-                if len(data) < 2:
-                    continue
+            today = df.iloc[-1]
+            yesterday = df.iloc[-2]
 
-                today = data.iloc[-1]
-                yesterday = data.iloc[-2]
+            vol_ratio = today["Volume"] / yesterday["Volume"] if yesterday["Volume"] > 0 else 0
 
-                # 出来高倍率
-                vol_ratio = today["Volume"] / yesterday["Volume"] if yesterday["Volume"] > 0 else 0
+            high = today["High"]
+            open_ = today["Open"]
+            close = today["Close"]
 
-                # 上髭実体比
-                high = today["High"]
-                open_ = today["Open"]
-                close = today["Close"]
+            upper_shadow = high - max(open_, close)
+            real_body = abs(close - open_)
+            shadow_ratio_value = upper_shadow / real_body if real_body > 0 else 0
 
-                upper_shadow = high - max(open_, close)
-                real_body = abs(close - open_)
-                shadow_ratio_value = upper_shadow / real_body if real_body > 0 else 0
+            if vol_ratio >= volume_ratio and shadow_ratio_value >= shadow_ratio:
+                results.append({
+                    "コード": code,
+                    "銘柄名": name,
+                    "出来高倍率": round(vol_ratio, 2),
+                    "上髭実体比": round(shadow_ratio_value, 2),
+                    "出来高": int(today["Volume"]),
+                    "上髭": round(upper_shadow, 2),
+                    "実体": round(real_body, 2),
+                })
 
-                # 条件判定
-                if vol_ratio >= volume_ratio and shadow_ratio_value >= shadow_ratio:
-                    results.append({
-                        "コード": code,
-                        "銘柄名": name,
-                        "出来高倍率": round(vol_ratio, 2),
-                        "上髭実体比": round(shadow_ratio_value, 2),
-                        "出来高": int(today["Volume"]),
-                        "上髭": round(upper_shadow, 2),
-                        "実体": round(real_body, 2),
-                    })
-
-            except Exception:
-                continue
+        except Exception:
+            continue
 
     return results
 
