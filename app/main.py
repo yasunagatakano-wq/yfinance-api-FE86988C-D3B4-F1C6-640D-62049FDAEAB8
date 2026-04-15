@@ -18,11 +18,13 @@ app = FastAPI()
 # ============================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    # allow_origins=["*"],
+    allow_origins=["https://yasunagatakano-wq.github.io"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # ============================
 # 外部ファイルの URL（main ブランチを参照）
