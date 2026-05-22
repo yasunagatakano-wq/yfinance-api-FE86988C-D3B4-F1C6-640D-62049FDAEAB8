@@ -129,10 +129,20 @@ def screening(volume_ratio: float = 5, shadow_ratio: float = 5):
 # /chart（単銘柄：従来通り yfinance 使用）
 # ============================
 @app.get("/chart")
-def chart(ticker: str):
+def chart(ticker: str, timeframe: str = "1d"):
     symbol = f"{ticker}.T"
 
-    df = yf.download(symbol, period="200d", interval="1d", progress=False)
+    # 日足200本に合わせる
+    if timeframe == "1d":
+        period = "200d"
+    elif timeframe == "1wk":
+        period = "1400d"   # 200週 ≒ 1400日
+    elif timeframe == "1mo":
+        period = "6000d"   # 200ヶ月 ≒ 6000日
+    else:
+        return {"error": "invalid timeframe"}
+
+    df = yf.download(symbol, period=period, interval=timeframe, progress=False)
     if df.empty:
         return {"error": "no data"}
 
