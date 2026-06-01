@@ -215,46 +215,49 @@ def screening(
         return {"error": "invalid mode"}
 
 # ============================
-# /chart（従来通り）
+# /chart
 # ============================
 @app.get("/chart")
 def chart(ticker: str, timeframe: str = "1d"):
     symbol = f"{ticker}.T"
 
-    # まずは「十分長い」日足だけを取る
-    # 週足・月足はここから集計する
+    # 日足を長期間取得
     df = yf.download(symbol, period="6000d", interval="1d", progress=False)
     if df.empty:
         return {"error": "no data"}
 
-    # MultiIndex 対応（銘柄列を抽出）
+    # MultiIndex 対応
     if isinstance(df.columns, pd.MultiIndex):
-        df = df.xs(symbol, level=1, axis=1)
+        try:
+            df = df.xs(symbol, level=1, axis=1)
+        except Exception:
+            pass
 
-    # DatetimeIndex に統一
-    df.index = pd.to_datetime(df.index)
+    # DatetimeIndex を保証
+    df.index = pd.to_datetime(df.index, errors="coerce")
+    df = df.dropna(subset=["Open", "High", "Low", "Close"])
 
-    # ---- 週足（W-FRI：金曜終値ベース）----
+    # ---- 週足（W-FRI）----
     df_week = df.resample("W-FRI").agg({
-        "Open": "first",   # 週の最初の営業日の始値
-        "High": "max",     # 週内の高値の最大
-        "Low": "min",      # 週内の安値の最小
-        "Close": "last",   # 週の最後の営業日の終値
-        "Volume": "sum",   # 週内出来高の合計
-    }).dropna(how="any")
+        "Open": "first",
+        "High": "max",
+        "Low": "min",
+        "Close": "last",
+        "Volume": "sum"
+    }).dropna(subset=["Open", "Close"])
 
-    # ---- 月足（暦月ベース）----
-    df_month = df.resample("M").agg({
-        "Open": "first",   # 月初の営業日の始値
-        "High": "max",     # 月内の高値の最大
-        "Low": "min",      # 月内の安値の最小
-        "Close": "last",   # 月末の営業日の終値
-        "Volume": "sum",   # 月内出来高の合計
-    }).dropna(how="any")
+    # ---- 月足（ME：Month-End）----
+    df_month = df.resample("ME").agg({
+        "Open": "first",
+        "High": "max",
+        "Low": "min",
+        "Close": "last",
+        "Volume": "sum"
+    }).dropna(subset=["Open", "Close"])
 
-    # ---- timeframe に応じて出力を選択 ----
+    # ---- timeframe に応じて返す ----
     if timeframe == "1d":
-        df_out = df.tail(200)          # 直近 200 本
+        df_out = df.tail(200)
     elif timeframe == "1wk":
         df_out = df_week.tail(200)
     elif timeframe == "1mo":
@@ -262,7 +265,6 @@ def chart(ticker: str, timeframe: str = "1d"):
     else:
         return {"error": "invalid timeframe"}
 
-    # 軽量な JSON に変換
     df_out.index = df_out.index.strftime("%Y-%m-%d")
 
     return {
