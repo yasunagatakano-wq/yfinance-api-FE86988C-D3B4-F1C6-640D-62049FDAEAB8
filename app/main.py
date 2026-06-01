@@ -221,28 +221,54 @@ def screening(
 def chart(ticker: str, timeframe: str = "1d"):
     symbol = f"{ticker}.T"
 
-    if timeframe == "1d":
-        period = "200d"
-    elif timeframe == "1wk":
-        period = "1400d"
-    elif timeframe == "1mo":
-        period = "6000d"
-    else:
-        return {"error": "invalid timeframe"}
-
-    df = yf.download(symbol, period=period, interval=timeframe, progress=False)
+    # まずは「十分長い」日足だけを取る
+    # 週足・月足はここから集計する
+    df = yf.download(symbol, period="6000d", interval="1d", progress=False)
     if df.empty:
         return {"error": "no data"}
 
+    # MultiIndex 対応（銘柄列を抽出）
     if isinstance(df.columns, pd.MultiIndex):
         df = df.xs(symbol, level=1, axis=1)
 
-    df.index = df.index.strftime("%Y-%m-%d")
+    # DatetimeIndex に統一
+    df.index = pd.to_datetime(df.index)
+
+    # ---- 週足（W-FRI：金曜終値ベース）----
+    df_week = df.resample("W-FRI").agg({
+        "Open": "first",   # 週の最初の営業日の始値
+        "High": "max",     # 週内の高値の最大
+        "Low": "min",      # 週内の安値の最小
+        "Close": "last",   # 週の最後の営業日の終値
+        "Volume": "sum",   # 週内出来高の合計
+    }).dropna(how="any")
+
+    # ---- 月足（暦月ベース）----
+    df_month = df.resample("M").agg({
+        "Open": "first",   # 月初の営業日の始値
+        "High": "max",     # 月内の高値の最大
+        "Low": "min",      # 月内の安値の最小
+        "Close": "last",   # 月末の営業日の終値
+        "Volume": "sum",   # 月内出来高の合計
+    }).dropna(how="any")
+
+    # ---- timeframe に応じて出力を選択 ----
+    if timeframe == "1d":
+        df_out = df.tail(200)          # 直近 200 本
+    elif timeframe == "1wk":
+        df_out = df_week.tail(200)
+    elif timeframe == "1mo":
+        df_out = df_month.tail(200)
+    else:
+        return {"error": "invalid timeframe"}
+
+    # 軽量な JSON に変換
+    df_out.index = df_out.index.strftime("%Y-%m-%d")
 
     return {
-        "Open": df["Open"].to_dict(),
-        "High": df["High"].to_dict(),
-        "Low": df["Low"].to_dict(),
-        "Close": df["Close"].to_dict(),
-        "Volume": df["Volume"].to_dict(),
+        "Open": df_out["Open"].to_dict(),
+        "High": df_out["High"].to_dict(),
+        "Low": df_out["Low"].to_dict(),
+        "Close": df_out["Close"].to_dict(),
+        "Volume": df_out["Volume"].to_dict(),
     }
