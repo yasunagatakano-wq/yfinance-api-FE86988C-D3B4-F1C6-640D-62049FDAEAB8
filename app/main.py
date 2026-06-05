@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import requests
 import json
-import math
 from io import BytesIO
 import warnings
 
@@ -60,12 +59,12 @@ def get_dates():
     for symbol, entry in data_json.items():
         if isinstance(entry, dict):
             for d in entry.keys():
-                if d.isdigit():  # "20240527" のようなキーのみ
+                if d.isdigit():
                     all_dates.add(d)
     return sorted(all_dates, reverse=True)
 
 # ============================
-# /screening（2モード対応）
+# /screening（ratio + date_ranking）
 # ============================
 @app.get("/screening")
 def screening(
@@ -77,7 +76,7 @@ def screening(
     results = []
 
     # ----------------------------
-    # モード A：従来の出来高×上髭検索
+    # モード A：出来高 × 上髭（target_date 対応）
     # ----------------------------
     if mode == "ratio":
         for row in ticker_list:
@@ -92,13 +91,23 @@ def screening(
             if not isinstance(entry, dict):
                 continue
 
-            # ★ 最新日付と前日を取得
-            dates = sorted([d for d in entry.keys() if d.isdigit()], reverse=True)
-            if len(dates) < 2:
-                continue
+            # 全日付（昇順）
+            dates = sorted([d for d in entry.keys() if d.isdigit()])
 
-            today_key = dates[0]
-            prev_key = dates[1]
+            # ★ target_date が指定されている場合
+            if target_date and target_date in dates:
+                idx = dates.index(target_date)
+                if idx == 0:
+                    continue  # 前日がない
+                today_key = dates[idx]
+                prev_key = dates[idx - 1]
+
+            # ★ 指定されていない場合は最新日（従来どおり）
+            else:
+                if len(dates) < 2:
+                    continue
+                today_key = dates[-1]
+                prev_key = dates[-2]
 
             today = entry.get(today_key)
             prev = entry.get(prev_key)
@@ -113,7 +122,7 @@ def screening(
                 if not prev_vol or prev_vol <= 0:
                     continue
 
-                vol_ratio = today_vol / prev_vol
+                vol_ratio_val = today_vol / prev_vol
 
                 high = today.get("h")
                 open_ = today.get("o")
@@ -128,14 +137,14 @@ def screening(
                 if real_body <= 0:
                     continue
 
-                shadow_ratio_value = upper_shadow / real_body
+                shadow_ratio_val = upper_shadow / real_body
 
-                if vol_ratio >= volume_ratio and shadow_ratio_value >= shadow_ratio:
+                if vol_ratio_val >= volume_ratio and shadow_ratio_val >= shadow_ratio:
                     results.append({
                         "コード": code,
                         "銘柄名": name,
-                        "出来高倍率": round(vol_ratio, 2),
-                        "上髭実体比": round(shadow_ratio_value, 2),
+                        "出来高倍率": round(vol_ratio_val, 2),
+                        "上髭実体比": round(shadow_ratio_val, 2),
                         "出来高": int(today_vol),
                         "上髭": round(upper_shadow, 2),
                         "実体": round(real_body, 2),
@@ -166,7 +175,6 @@ def screening(
             if not isinstance(entry, dict):
                 continue
 
-            # ★ target_date の前日を探す
             dates = sorted([d for d in entry.keys() if d.isdigit()])
             if target_date not in dates:
                 continue
@@ -204,18 +212,14 @@ def screening(
             except Exception:
                 continue
 
-        # ★ 値上がり率の降順で上位100件
         results.sort(key=lambda x: x["値上がり率"], reverse=True)
         return results[:100]
 
-    # ----------------------------
-    # 不正モード
-    # ----------------------------
     else:
         return {"error": "invalid mode"}
 
 # ============================
-# /chart
+# /chart（週足・月足は日足から生成）
 # ============================
 @app.get("/chart")
 def chart(ticker: str, timeframe: str = "1d"):
