@@ -25,8 +25,8 @@ app.add_middleware(
 # ============================
 # 外部ファイル URL
 # ============================
-DATA_JSON_URL = "https://raw.githubusercontent.com/yt-F6D34A22-537C-E881-530F-F9E7A956A78B/batch-F0AF5A52-4132-E578-F4A3-36FDFFACE338/main/data.json"
-EXCEL_URL = "https://raw.githubusercontent.com/yt-F6D34A22-537C-E881-530F-F9E7A956A78B/batch-F0AF5A52-4132-E578-F4A3-36FDFFACE338/main/data_j.xlsx"
+DATA_JSON_URL = "https://raw.githubusercontent.com/yt-F6D34A22-537C-E881-530F-F9E7A956A78B/batches/main/data.json"
+EXCEL_URL = "https://raw.githubusercontent.com/yt-F6D34A22-537C-E881-530F-F9E7A956A78B/batches/main/data_j.xlsx"
 
 # ============================
 # データ読み込み
