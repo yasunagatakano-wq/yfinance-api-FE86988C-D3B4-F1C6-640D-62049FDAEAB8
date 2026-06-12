@@ -27,6 +27,7 @@ app.add_middleware(
 # ============================
 DATA_JSON_URL = "https://raw.githubusercontent.com/yt-F6D34A22-537C-E881-530F-F9E7A956A78B/batches/main/data/data.json"
 EXCEL_URL = "https://raw.githubusercontent.com/yt-F6D34A22-537C-E881-530F-F9E7A956A78B/batches/main/data/data_j.xlsx"
+HEURISTICS_JSON_URL = "https://raw.githubusercontent.com/yt-F6D34A22-537C-E881-530F-F9E7A956A78B/batches/main/data/heuristics.json"
 
 # ============================
 # データ読み込み
@@ -64,7 +65,7 @@ def get_dates():
     return sorted(all_dates, reverse=True)
 
 # ============================
-# /screening（ratio + date_ranking）
+# /screening（ratio + date_ranking + heuristics）
 # ============================
 @app.get("/screening")
 def screening(
@@ -76,7 +77,7 @@ def screening(
     results = []
 
     # ----------------------------
-    # モード A：出来高 × 上髭（target_date 対応）
+    # モード A：出来高 × 上髭
     # ----------------------------
     if mode == "ratio":
         for row in ticker_list:
@@ -91,18 +92,14 @@ def screening(
             if not isinstance(entry, dict):
                 continue
 
-            # 全日付（昇順）
             dates = sorted([d for d in entry.keys() if d.isdigit()])
 
-            # ★ target_date が指定されている場合
             if target_date and target_date in dates:
                 idx = dates.index(target_date)
                 if idx == 0:
-                    continue  # 前日がない
+                    continue
                 today_key = dates[idx]
                 prev_key = dates[idx - 1]
-
-            # ★ 指定されていない場合は最新日（従来どおり）
             else:
                 if len(dates) < 2:
                     continue
@@ -181,7 +178,7 @@ def screening(
 
             idx = dates.index(target_date)
             if idx == 0:
-                continue  # 前日がない
+                continue
 
             prev_key = dates[idx - 1]
 
@@ -214,6 +211,18 @@ def screening(
 
         results.sort(key=lambda x: x["値上がり率"], reverse=True)
         return results[:100]
+
+    # ----------------------------
+    # モード C：heuristics.json を返す
+    # ----------------------------
+    elif mode == "heuristics":
+        try:
+            url = f"{HEURISTICS_JSON_URL}?t={pd.Timestamp.now().timestamp()}"
+            resp = requests.get(url)
+            resp.raise_for_status()
+            return json.loads(resp.text)
+        except Exception as e:
+            return {"error": f"failed to load heuristics.json: {str(e)}"}
 
     else:
         return {"error": "invalid mode"}
