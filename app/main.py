@@ -25,9 +25,11 @@ app.add_middleware(
 # ============================
 # 外部ファイル URL
 # ============================
-DATA_JSON_URL = "https://raw.githubusercontent.com/yt-F6D34A22-537C-E881-530F-F9E7A956A78B/batches/main/data/data.json"
-EXCEL_URL = "https://raw.githubusercontent.com/yt-F6D34A22-537C-E881-530F-F9E7A956A78B/batches/main/data/data_j.xlsx"
-HEURISTICS_JSON_URL = "https://raw.githubusercontent.com/yt-F6D34A22-537C-E881-530F-F9E7A956A78B/batches/main/data/heuristics.json"
+BASE_URL = "https://raw.githubusercontent.com/yt-F6D34A22-537C-E881-530F-F9E7A956A78B/batches/main/data/"
+
+DATA_JSON_URL = BASE_URL + "data.json"
+EXCEL_URL = BASE_URL + "data_j.xlsx"
+HEURISTICS_JSON_URL = BASE_URL + "heuristics.json"
 
 # ============================
 # データ読み込み
